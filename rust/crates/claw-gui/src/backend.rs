@@ -22,7 +22,7 @@ const KNOWN_MODELS: &[(&str, &str)] = &[
 ];
 
 const MEDICAL_SYSTEM_PROMPT: &str = "\
-你是 VIBE Paper，一个医学科研助手。你的任务是通过对话帮助医学研究人员完成文献检索、\
+你是 Galen，一个医学科研助手。你的任务是通过对话帮助医学研究人员完成文献检索、\
 论文理解和学术写作。\n\
 \n\
 ## 工具使用规则\n\

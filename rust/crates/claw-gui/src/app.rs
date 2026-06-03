@@ -115,7 +115,7 @@ impl ClawMdApp {
             backend,
             messages: vec![ChatMessage {
                 role: "assistant".to_string(),
-                content: "欢迎使用 VIBE Paper！我是你的科研助手。\n\n你可以直接问我问题，我会帮你检索文献、解释术语、格式化引用。\n\n试试问我：\n• 帮我查一下阿尔茨海默病的最新研究\n• 解释一下什么是单核苷酸多态性\n• 用 Vancouver 格式引用这篇 PMID: 12345678".to_string(),
+                content: "欢迎使用 Galen！我是你的科研助手。\n\n你可以直接问我问题，我会帮你检索文献、解释术语、格式化引用。\n\n试试问我：\n• 帮我查一下阿尔茨海默病的最新研究\n• 解释一下什么是单核苷酸多态性\n• 用 Vancouver 格式引用这篇 PMID: 12345678".to_string(),
             }],
             input: String::new(),
             mode: AppMode::Placeholder,
@@ -242,7 +242,7 @@ impl eframe::App for ClawMdApp {
 
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.heading("🦞 VIBE Paper");
+                ui.heading("🦞 Galen");
                 ui.separator();
                 ui.label("模型:");
                 egui::ComboBox::from_id_salt("model_select")
@@ -518,7 +518,7 @@ impl eframe::App for ClawMdApp {
                                     ),
                                     "assistant" => (
                                         egui::Color32::from_rgb(144, 238, 144),
-                                        "🤖 VIBE Paper",
+                                        "🤖 Galen",
                                     ),
                                     _ => (egui::Color32::GRAY, "❓"),
                                 };

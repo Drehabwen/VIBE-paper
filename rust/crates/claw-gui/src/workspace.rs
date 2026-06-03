@@ -18,7 +18,7 @@ impl Default for WorkspaceConfig {
 
 impl WorkspaceConfig {
     fn config_path() -> Option<PathBuf> {
-        let dir = dirs::config_dir()?.join("vibe-paper");
+        let dir = dirs::config_dir()?.join("galen");
         Some(dir.join("workspace.json"))
     }
 

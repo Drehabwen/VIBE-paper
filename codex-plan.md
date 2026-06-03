@@ -31,7 +31,7 @@
 - Added `claw logs` with `--last`, `--dir`, and `--open`.
 - Added `scripts/windows/Install-ClawCode.ps1` for release install, optional PATH update, and shortcut refresh.
 - Updated README and USAGE with the stable Windows launcher workflow.
-- Recreated `C:\Users\DORAT\Desktop\Claw Code.lnk`.
+- Recreated `C:\Users\DORAT\Desktop\Galen.lnk`.
 - Verification passed: PowerShell parser checks, `cargo build -p rusty-claude-cli`, `cargo build --release -p rusty-claude-cli`, targeted bin test for command parsing, `claw launch-check`, and `claw logs`.
 - Follow-up verification passed: `cargo fmt`; `cargo test -p rusty-claude-cli --bin claw removed_login_and_logout_subcommands_error_helpfully -- --nocapture`.
 - Remaining warning: user-level PATH updates may fail under current registry policy; installer now warns and continues.

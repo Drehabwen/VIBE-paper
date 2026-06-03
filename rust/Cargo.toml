@@ -12,7 +12,7 @@ members = [
     "crates/rusty-claude-cli",
     "crates/telemetry",
     "crates/tools",
-    "crates/vibe-paper/src-tauri",
+    "crates/galen/src-tauri",
 ]
 resolver = "2"
 

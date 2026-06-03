@@ -14,12 +14,12 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1200.0, 800.0])
             .with_min_inner_size([800.0, 500.0])
-            .with_title("VIBE Paper — 医学科研助手"),
+            .with_title("Galen — 医学科研助手"),
         ..Default::default()
     };
 
     eframe::run_native(
-        "VIBE Paper",
+        "Galen",
         options,
         Box::new(move |cc| {
             let app = app::ClawMdApp::new(cc, initial_workspace.clone());
