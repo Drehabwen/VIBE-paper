@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use api::{
     ContentBlockDelta, InputContentBlock, InputMessage, MessageRequest, OpenAiCompatClient,
@@ -173,6 +173,17 @@ impl ChatBackend {
         ]
     }
 
+    fn runtime() -> &'static tokio::runtime::Runtime {
+        static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+        RT.get_or_init(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .expect("Failed to create tokio runtime")
+        })
+    }
+
     pub fn spawn_chat(
         model_alias: String,
         model_id: String,
@@ -182,7 +193,7 @@ impl ChatBackend {
         medical: Arc<MedicalCore>,
         router: ModelRouter,
     ) {
-        tokio::spawn(async move {
+        Self::runtime().spawn(async move {
             let result = Self::run_chat(
                 &model_alias, &model_id, &user_message, conversation_history, &tx, &medical,
                 &router,
