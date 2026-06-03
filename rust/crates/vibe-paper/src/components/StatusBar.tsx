@@ -1,32 +1,17 @@
 interface Props {
-  input: string;
-  onInputChange: (v: string) => void;
-  onSend: () => void;
-  sending: boolean;
+  wordCount: number;
+  citationCount: number;
+  statusMessage: string;
 }
 
-export function StatusBar({ input, onInputChange, onSend, sending }: Props) {
+export function StatusBar({ wordCount, citationCount, statusMessage }: Props) {
   return (
-    <div className="bottom-bar">
-      <input
-        type="text"
-        className="chat-input"
-        placeholder="输入消息，Ctrl+Enter 发送..."
-        value={input}
-        onChange={(e) => onInputChange(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-            onSend();
-          }
-        }}
-      />
-      <button
-        className="btn btn-primary"
-        disabled={sending || !input.trim()}
-        onClick={onSend}
-      >
-        发送
-      </button>
+    <div className="bottom-bar status-bar-compact">
+      <span className="status-stat">📝 {wordCount} 字</span>
+      <span className="status-separator">|</span>
+      <span className="status-stat">📄 {citationCount} 引用</span>
+      <span className="status-spacer" />
+      <span className="status-message">{statusMessage}</span>
     </div>
   );
 }

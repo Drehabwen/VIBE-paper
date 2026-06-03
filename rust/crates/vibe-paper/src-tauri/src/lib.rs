@@ -1,5 +1,6 @@
 mod backend;
 mod commands;
+mod tools;
 mod workspace;
 
 use commands::AppState;

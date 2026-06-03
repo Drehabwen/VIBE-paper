@@ -23,6 +23,24 @@ export interface Paper {
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+  timestamp: number;
+  model?: string;
 }
 
-export type LeftTab = "workspace" | "papers" | "notes";
+export type LibraryTab = "papers" | "notes" | "files";
+
+export interface DocumentState {
+  /** HTML content from Tiptap editor */
+  content: string;
+  title: string;
+  isDirty: boolean;
+  filePath: string | null;
+  wordCount: number;
+  citationCount: number;
+}
+
+export interface EditorStats {
+  wordCount: number;
+  charCount: number;
+  citationCount: number;
+}

@@ -439,6 +439,8 @@ struct StreamState {
     message_started: bool,
     text_started: bool,
     text_finished: bool,
+    thinking_started: bool,
+    thinking_finished: bool,
     finished: bool,
     stop_reason: Option<String>,
     usage: Option<Usage>,
@@ -452,6 +454,8 @@ impl StreamState {
             message_started: false,
             text_started: false,
             text_finished: false,
+            thinking_started: false,
+            thinking_finished: false,
             finished: false,
             stop_reason: None,
             usage: None,
@@ -495,11 +499,12 @@ impl StreamState {
         for choice in chunk.choices {
             // Reasoning models (DeepSeek V4, etc.) emit text in `reasoning_content`
             // while `content` stays null. Fall back so those models produce visible output.
+            let reasoning = choice.delta.reasoning_content.clone();
             let text_content = choice
                 .delta
                 .content
                 .filter(|v| !v.is_empty())
-                .or_else(|| choice.delta.reasoning_content.filter(|v| !v.is_empty()));
+                .or_else(|| reasoning.clone().filter(|v| !v.is_empty()));
             if let Some(content) = text_content {
                 if !self.text_started {
                     self.text_started = true;
@@ -513,6 +518,30 @@ impl StreamState {
                 events.push(StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
                     index: 0,
                     delta: ContentBlockDelta::TextDelta { text: content },
+                }));
+            }
+
+            // Emit Thinking blocks for `reasoning_content` so it can be
+            // round-tripped back to the API on subsequent turns (DeepSeek V4, etc.).
+            if let Some(reasoning_text) = reasoning
+                .as_deref()
+                .filter(|v| !v.is_empty())
+            {
+                if !self.thinking_started {
+                    self.thinking_started = true;
+                    events.push(StreamEvent::ContentBlockStart(ContentBlockStartEvent {
+                        index: 1,
+                        content_block: OutputContentBlock::Thinking {
+                            thinking: String::new(),
+                            signature: None,
+                        },
+                    }));
+                }
+                events.push(StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
+                    index: 1,
+                    delta: ContentBlockDelta::ThinkingDelta {
+                        thinking: reasoning_text.to_string(),
+                    },
                 }));
             }
 
@@ -568,6 +597,12 @@ impl StreamState {
             self.text_finished = true;
             events.push(StreamEvent::ContentBlockStop(ContentBlockStopEvent {
                 index: 0,
+            }));
+        }
+        if self.thinking_started && !self.thinking_finished {
+            self.thinking_finished = true;
+            events.push(StreamEvent::ContentBlockStop(ContentBlockStopEvent {
+                index: 1,
             }));
         }
 
@@ -960,6 +995,7 @@ pub fn translate_message(message: &InputMessage, model: &str) -> Vec<Value> {
         "assistant" => {
             let mut text = String::new();
             let mut tool_calls = Vec::new();
+            let mut reasoning = String::new();
             for block in &message.content {
                 match block {
                     InputContentBlock::Text { text: value } => text.push_str(value),
@@ -971,10 +1007,13 @@ pub fn translate_message(message: &InputMessage, model: &str) -> Vec<Value> {
                             "arguments": input.to_string(),
                         }
                     })),
+                    InputContentBlock::Thinking { thinking, .. } => {
+                        reasoning.push_str(thinking);
+                    }
                     InputContentBlock::ToolResult { .. } => {}
                 }
             }
-            if text.is_empty() && tool_calls.is_empty() {
+            if text.is_empty() && tool_calls.is_empty() && reasoning.is_empty() {
                 Vec::new()
             } else {
                 let mut msg = serde_json::json!({
@@ -985,6 +1024,10 @@ pub fn translate_message(message: &InputMessage, model: &str) -> Vec<Value> {
                 // assistant messages with an explicit empty tool_calls array.
                 if !tool_calls.is_empty() {
                     msg["tool_calls"] = json!(tool_calls);
+                }
+                // Reasoning / chain-of-thought content (DeepSeek V4, etc.)
+                if !reasoning.is_empty() {
+                    msg["reasoning_content"] = json!(reasoning);
                 }
                 vec![msg]
             }
@@ -1014,7 +1057,7 @@ pub fn translate_message(message: &InputMessage, model: &str) -> Vec<Value> {
                     }
                     Some(msg)
                 }
-                InputContentBlock::ToolUse { .. } => None,
+                InputContentBlock::ToolUse { .. } | InputContentBlock::Thinking { .. } => None,
             })
             .collect(),
     }

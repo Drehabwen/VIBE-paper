@@ -3,14 +3,14 @@ use std::sync::{Arc, Mutex};
 use api::{
     ContentBlockDelta, InputContentBlock, InputMessage, MessageRequest, OpenAiCompatClient,
     OpenAiCompatConfig, OutputContentBlock, ProviderClient, StreamEvent as ApiStreamEvent,
-    ToolChoice, ToolDefinition, ToolResultContentBlock,
+    ToolChoice, ToolResultContentBlock,
 };
 use medical_core::MedicalCore;
 use medical_core::types::Paper;
 use model_router::ModelRouter;
-use serde_json::json;
-use std::fs;
 use std::path::PathBuf;
+
+use crate::tools::{ToolContext, ToolRegistry};
 
 const KNOWN_MODELS: &[(&str, &str)] = &[
     ("opus", "claude-opus-4-6"),
@@ -176,253 +176,6 @@ impl ChatBackend {
 // Standalone functions (ported from ChatBackend methods)
 // ---------------------------------------------------------------------------
 
-fn tool_definitions() -> Vec<ToolDefinition> {
-    vec![
-        ToolDefinition {
-            name: "search_pubmed".into(),
-            description: Some(
-                "Search PubMed for medical literature. Call this when the user asks about \
-                 any medical topic, disease, drug, gene, or wants to find research papers. \
-                 Returns a list of papers with PMID, title, authors, journal, and year."
-                    .into(),
-            ),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "PubMed search query. Use MeSH terms and Boolean operators (AND, OR, NOT) for precision."
-                    },
-                    "max_results": {
-                        "type": "integer",
-                        "description": "Maximum results (1-20, default 10)"
-                    }
-                },
-                "required": ["query"]
-            }),
-        },
-        ToolDefinition {
-            name: "fetch_article".into(),
-            description: Some(
-                "Fetch detailed metadata for a specific PubMed article by PMID. \
-                 Returns title, abstract, authors, journal, year, DOI, etc."
-                    .into(),
-            ),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "pmid": {
-                        "type": "string",
-                        "description": "PubMed ID (PMID) of the article"
-                    }
-                },
-                "required": ["pmid"]
-            }),
-        },
-        ToolDefinition {
-            name: "format_citation".into(),
-            description: Some(
-                "Format one or more papers into a specific citation style. \
-                 Use this when the user asks to format references."
-                    .into(),
-            ),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "pmids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "List of PubMed IDs to format"
-                    },
-                    "style": {
-                        "type": "string",
-                        "enum": ["apa", "vancouver", "bibtex", "ris", "mla"],
-                        "description": "Citation style"
-                    }
-                },
-                "required": ["pmids", "style"]
-            }),
-        },
-        ToolDefinition {
-            name: "create_directory".into(),
-            description: Some(
-                "Create a directory in the workspace. Creates all parent directories if needed."
-                    .into(),
-            ),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Directory path relative to workspace root"
-                    }
-                },
-                "required": ["path"]
-            }),
-        },
-        ToolDefinition {
-            name: "write_file".into(),
-            description: Some(
-                "Write content to a file in the workspace. Creates parent directories if needed."
-                    .into(),
-            ),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "File path relative to workspace root"
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "Content to write to the file"
-                    }
-                },
-                "required": ["path", "content"]
-            }),
-        },
-        ToolDefinition {
-            name: "read_file".into(),
-            description: Some(
-                "Read the contents of a file from the workspace."
-                    .into(),
-            ),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "File path relative to workspace root"
-                    }
-                },
-                "required": ["path"]
-            }),
-        },
-        ToolDefinition {
-            name: "list_files".into(),
-            description: Some(
-                "List files and directories in the workspace. If no path is provided, \
-                 lists the workspace root directory."
-                    .into(),
-            ),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Optional directory path relative to workspace root (defaults to root)"
-                    }
-                },
-                "required": []
-            }),
-        },
-        ToolDefinition {
-            name: "save_paper".into(),
-            description: Some(
-                "Save paper metadata as a JSON file to the workspace papers/ directory."
-                    .into(),
-            ),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "pmid": {
-                        "type": "string",
-                        "description": "PubMed ID of the paper to save"
-                    },
-                    "format": {
-                        "type": "string",
-                        "description": "Output format (default: json)",
-                        "default": "json"
-                    }
-                },
-                "required": ["pmid"]
-            }),
-        },
-        ToolDefinition {
-            name: "delete_file".into(),
-            description: Some("Delete a file from the workspace. Cannot delete directories (use delete_directory for that). Operation is irreversible.".into()),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "File path relative to workspace root"
-                    }
-                },
-                "required": ["path"]
-            }),
-        },
-        ToolDefinition {
-            name: "delete_directory".into(),
-            description: Some("Recursively delete a directory and all its contents from the workspace. Operation is irreversible. Use with caution.".into()),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Directory path relative to workspace root"
-                    }
-                },
-                "required": ["path"]
-            }),
-        },
-        ToolDefinition {
-            name: "move_file".into(),
-            description: Some("Move or rename a file or directory within the workspace. Creates parent directories if needed.".into()),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "from": {
-                        "type": "string",
-                        "description": "Source path relative to workspace root"
-                    },
-                    "to": {
-                        "type": "string",
-                        "description": "Destination path relative to workspace root"
-                    }
-                },
-                "required": ["from", "to"]
-            }),
-        },
-        ToolDefinition {
-            name: "search_files".into(),
-            description: Some("Search for files by glob pattern within the workspace (e.g. '**/*.json', '*.md'). Also supports grep-style content search with the 'grep' parameter.".into()),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "pattern": {
-                        "type": "string",
-                        "description": "Glob pattern for file name matching (e.g., '*.json', '**/notes/*.md')"
-                    },
-                    "grep": {
-                        "type": "string",
-                        "description": "Optional: text or regex pattern to search for within matching files"
-                    },
-                    "path": {
-                        "type": "string",
-                        "description": "Optional subdirectory to search in (defaults to workspace root)"
-                    }
-                },
-                "required": ["pattern"]
-            }),
-        },
-        ToolDefinition {
-            name: "execute_command".into(),
-            description: Some("Execute a shell command within the workspace directory. Use for running scripts (Python, R, etc.), data analysis, or file processing. Command runs in a shell environment with the workspace root as the working directory. Has a 30-second timeout.".into()),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "command": {
-                        "type": "string",
-                        "description": "Shell command to execute (e.g., 'python analyze.py', 'Rscript plot.R')"
-                    }
-                },
-                "required": ["command"]
-            }),
-        },
-    ]
-}
-
 fn make_client(
     model_alias: &str,
     model_id: &str,
@@ -458,419 +211,10 @@ fn make_client(
 }
 
 // ---------------------------------------------------------------------------
-// Tool execution
-// ---------------------------------------------------------------------------
-
-fn resolve_workspace_path(
-    workspace_root: &std::sync::Mutex<Option<PathBuf>>,
-    rel: &str,
-) -> Result<PathBuf, String> {
-    let guard = workspace_root
-        .lock()
-        .map_err(|e| format!("Workspace lock error: {e}"))?;
-    let root = guard
-        .as_ref()
-        .ok_or_else(|| "No workspace selected. Please select a workspace folder first.".to_string())?;
-    let resolved = root.join(rel);
-    // Ensure the resolved path is still within the workspace root
-    let canonical = fs::canonicalize(&root).map_err(|e| format!("Cannot resolve workspace root: {e}"))?;
-    match fs::canonicalize(&resolved) {
-        Ok(p) if p.starts_with(&canonical) => Ok(resolved),
-        Ok(_) => Err("Access denied: path is outside workspace".to_string()),
-        Err(_) => {
-            // If the path doesn't exist yet (e.g., for writes), do a path traversal check
-            let root_str = canonical.to_string_lossy().to_string();
-            let resolved_str = resolved.to_string_lossy().to_string();
-            if resolved_str.starts_with(&root_str) {
-                Ok(resolved)
-            } else {
-                // Attempt simple path traversal check
-                let root_parts: Vec<&str> = canonical
-                    .components()
-                    .map(|c| c.as_os_str().to_str().unwrap_or(""))
-                    .collect();
-                let mut resolved_parts: Vec<&str> = resolved
-                    .components()
-                    .map(|c| c.as_os_str().to_str().unwrap_or(""))
-                    .collect();
-                // Filter out ".." and "."
-                resolved_parts.retain(|p| *p != ".." && *p != ".");
-                if resolved_parts.starts_with(&root_parts) {
-                    Ok(resolved)
-                } else {
-                    Err("Access denied: path is outside workspace".to_string())
-                }
-            }
-        }
-    }
-}
-
-async fn execute_tool<F: Fn(ChatEvent)>(
-    medical: &MedicalCore,
-    name: &str,
-    input: serde_json::Value,
-    workspace_root: &std::sync::Mutex<Option<PathBuf>>,
-    on_event: &F,
-) -> Result<String, String> {
-    match name {
-        "search_pubmed" => {
-            let query = input["query"]
-                .as_str()
-                .ok_or("Missing 'query' parameter")?;
-            let limit = input["max_results"].as_u64().unwrap_or(10) as u32;
-            let papers = medical
-                .search_pubmed(query, limit)
-                .await
-                .map_err(|e| format!("PubMed search error: {e}"))?;
-
-            if papers.is_empty() {
-                Ok("No results found. Try broader search terms.".into())
-            } else {
-                let summary: Vec<String> = papers
-                    .iter()
-                    .map(|p| {
-                        let authors = if p.authors.is_empty() {
-                            "Unknown".to_string()
-                        } else if p.authors.len() == 1 {
-                            p.authors[0].to_string()
-                        } else {
-                            format!("{} et al.", p.authors[0])
-                        };
-                        let journal = p.journal.as_deref().unwrap_or("Unknown Journal");
-                        let year = p.year.as_deref().unwrap_or("n.d.");
-                        let title = &p.title;
-                        format!(
-                            "PMID:{}\n  {}\n  {} — {} ({})\n",
-                            p.pmid, title, authors, journal, year
-                        )
-                    })
-                    .collect();
-                Ok(format!(
-                    "Found {} results:\n\n{}",
-                    papers.len(),
-                    summary.join("\n")
-                ))
-            }
-        }
-        "fetch_article" => {
-            let pmid = input["pmid"]
-                .as_str()
-                .ok_or("Missing 'pmid' parameter")?;
-            let paper = medical
-                .fetch_article(pmid)
-                .await
-                .map_err(|e| format!("PubMed fetch error: {e}"))?;
-
-            match paper {
-                None => Ok(format!("No article found for PMID: {pmid}")),
-                Some(p) => {
-                    let abstract_text = p
-                        .abstract_text
-                        .as_deref()
-                        .unwrap_or("No abstract available");
-                    Ok(format!(
-                        "Title: {}\nAuthors: {}\nJournal: {}\nYear: {}\nDOI: {}\n\nAbstract:\n{}",
-                        p.title,
-                        p.authors.iter().map(|a| a.to_string()).collect::<Vec<_>>().join(", "),
-                        p.journal.as_deref().unwrap_or("N/A"),
-                        p.year.as_deref().unwrap_or("N/A"),
-                        p.doi.as_deref().unwrap_or("N/A"),
-                        abstract_text,
-                    ))
-                }
-            }
-        }
-        "format_citation" => {
-            let pmids: Vec<String> = input["pmids"]
-                .as_array()
-                .ok_or("Missing 'pmids' parameter")?
-                .iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect();
-            let style_str = input["style"]
-                .as_str()
-                .ok_or("Missing 'style' parameter")?;
-            let style = medical_core::types::CitationStyle::from_str(style_str)
-                .ok_or(format!("Unknown citation style: {style_str}"))?;
-
-            let papers = medical
-                .pubmed
-                .fetch_articles(&pmids)
-                .await
-                .map_err(|e| format!("PubMed fetch error: {e}"))?;
-
-            let formatted = medical.format_citations(&papers, style);
-            Ok(formatted)
-        }
-        "create_directory" => {
-            let path = input["path"]
-                .as_str()
-                .ok_or("Missing 'path' parameter")?;
-            let target = resolve_workspace_path(workspace_root, path)?;
-            fs::create_dir_all(&target)
-                .map_err(|e| format!("Failed to create directory: {e}"))?;
-            Ok(format!("Created: {}", target.display()))
-        }
-        "write_file" => {
-            let path = input["path"]
-                .as_str()
-                .ok_or("Missing 'path' parameter")?;
-            let content = input["content"]
-                .as_str()
-                .ok_or("Missing 'content' parameter")?;
-            let target = resolve_workspace_path(workspace_root, path)?;
-            if let Some(parent) = target.parent() {
-                fs::create_dir_all(parent)
-                    .map_err(|e| format!("Failed to create parent directories: {e}"))?;
-            }
-            let bytes = content.as_bytes();
-            fs::write(&target, bytes)
-                .map_err(|e| format!("Failed to write file: {e}"))?;
-            Ok(format!("Wrote {} bytes to {}", bytes.len(), target.display()))
-        }
-        "read_file" => {
-            let path = input["path"]
-                .as_str()
-                .ok_or("Missing 'path' parameter")?;
-            let target = resolve_workspace_path(workspace_root, path)?;
-            let content = fs::read_to_string(&target)
-                .map_err(|e| format!("Failed to read file: {e}"))?;
-            // Limit to 100KB
-            let limited = if content.len() > 102_400 {
-                format!("{}...\n[File truncated at 100KB]", &content[..102_400])
-            } else {
-                content.clone()
-            };
-            on_event(ChatEvent::WorkspaceFileContent {
-                path: path.to_string(),
-                content: content.clone(),
-            });
-            Ok(limited)
-        }
-        "list_files" => {
-            let path = input["path"]
-                .as_str()
-                .unwrap_or("");
-            let target = resolve_workspace_path(workspace_root, path)?;
-            let mut entries: Vec<FileEntry> = Vec::new();
-
-            let dir_iter = fs::read_dir(&target)
-                .map_err(|e| format!("Failed to read directory: {e}"))?;
-            for entry in dir_iter {
-                let entry = entry.map_err(|e| format!("Failed to read entry: {e}"))?;
-                let name = entry.file_name().to_string_lossy().to_string();
-                let meta = entry.metadata().ok();
-                let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
-                let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
-
-                let entry_path = entry.path();
-                let rel = entry_path
-                    .strip_prefix(&target)
-                    .unwrap_or(&entry_path)
-                    .to_string_lossy()
-                    .to_string();
-
-                entries.push(FileEntry {
-                    name,
-                    path: if path.is_empty() { rel } else { format!("{}/{}", path, rel) },
-                    is_dir,
-                    size,
-                });
-            }
-
-            // Sort: dirs first, then by name
-            entries.sort_by(|a, b| {
-                b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name))
-            });
-
-            on_event(ChatEvent::WorkspaceFileList(entries.clone()));
-
-            // Build human-readable listing
-            let listing: Vec<String> = entries
-                .iter()
-                .map(|e| {
-                    let prefix = if e.is_dir { "[DIR] " } else { "[FILE]" };
-                    let size_info = if e.is_dir {
-                        String::new()
-                    } else {
-                        format!(" ({} bytes)", e.size)
-                    };
-                    format!("{} {}{}", prefix, e.path, size_info)
-                })
-                .collect();
-            if listing.is_empty() {
-                Ok(format!("Directory is empty: {}", path))
-            } else {
-                Ok(format!(
-                    "Contents of {}:\n{}",
-                    if path.is_empty() { "workspace root" } else { path },
-                    listing.join("\n")
-                ))
-            }
-        }
-        "save_paper" => {
-            let pmid = input["pmid"]
-                .as_str()
-                .ok_or("Missing 'pmid' parameter")?;
-            let format = input["format"]
-                .as_str()
-                .unwrap_or("json");
-
-            // Fetch the paper metadata
-            let paper = medical
-                .fetch_article(pmid)
-                .await
-                .map_err(|e| format!("PubMed fetch error: {e}"))?
-                .ok_or_else(|| format!("No article found for PMID: {pmid}"))?;
-
-            // Ensure papers/ directory exists
-            let papers_dir = resolve_workspace_path(workspace_root, "papers")?;
-            fs::create_dir_all(&papers_dir)
-                .map_err(|e| format!("Failed to create papers directory: {e}"))?;
-
-            let filename = format!("{}.{}", pmid, format);
-            let target = papers_dir.join(&filename);
-
-            let content = match format {
-                "json" => serde_json::to_string_pretty(&paper)
-                    .map_err(|e| format!("Failed to serialize paper: {e}"))?,
-                _ => return Err(format!("Unsupported format: {format}. Use 'json'.")),
-            };
-
-            fs::write(&target, content)
-                .map_err(|e| format!("Failed to write paper file: {e}"))?;
-
-            Ok(format!("Saved paper {} to papers/{}", pmid, filename))
-        }
-        "delete_file" => {
-            let path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
-            let target = resolve_workspace_path(workspace_root, path)?;
-            let meta = fs::metadata(&target).map_err(|e| format!("Cannot access file: {e}"))?;
-            if meta.is_dir() {
-                return Err("Use delete_directory for directories, not delete_file.".into());
-            }
-            fs::remove_file(&target)
-                .map_err(|e| format!("Failed to delete file: {e}"))?;
-            Ok(format!("Deleted file: {}", target.display()))
-        }
-        "delete_directory" => {
-            let path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
-            let target = resolve_workspace_path(workspace_root, path)?;
-            let meta =
-                fs::metadata(&target).map_err(|e| format!("Cannot access directory: {e}"))?;
-            if !meta.is_dir() {
-                return Err("Path is not a directory. Use delete_file for files.".into());
-            }
-            fs::remove_dir_all(&target)
-                .map_err(|e| format!("Failed to delete directory: {e}"))?;
-            Ok(format!("Deleted directory: {}", target.display()))
-        }
-        "move_file" => {
-            let from = input["from"].as_str().ok_or("Missing 'from' parameter")?;
-            let to = input["to"].as_str().ok_or("Missing 'to' parameter")?;
-            let source = resolve_workspace_path(workspace_root, from)?;
-            let dest = resolve_workspace_path(workspace_root, to)?;
-            if let Some(parent) = dest.parent() {
-                fs::create_dir_all(parent)
-                    .map_err(|e| format!("Failed to create parent directories: {e}"))?;
-            }
-            fs::rename(&source, &dest)
-                .map_err(|e| format!("Failed to move/rename: {e}"))?;
-            Ok(format!(
-                "Moved {} -> {}",
-                source.display(),
-                dest.display()
-            ))
-        }
-        "search_files" => {
-            let pattern = input["pattern"]
-                .as_str()
-                .ok_or("Missing 'pattern' parameter")?;
-            let grep = input["grep"].as_str().filter(|s| !s.is_empty());
-            let search_path = input["path"].as_str().unwrap_or("");
-            let target = resolve_workspace_path(workspace_root, search_path)?;
-
-            let mut results: Vec<String> = Vec::new();
-            // Use glob to find matching files
-            let glob_pattern = target.join(pattern);
-            let glob_str = glob_pattern.to_string_lossy().to_string();
-            let paths = glob::glob(&glob_str)
-                .map_err(|e| format!("Invalid glob pattern: {e}"))?;
-            for entry in paths {
-                match entry {
-                    Ok(p) => {
-                        let rel = p.strip_prefix(&target).unwrap_or(&p).to_string_lossy().to_string();
-                        let meta = fs::metadata(&p).ok();
-                        let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
-                        let prefix = if is_dir { "[DIR] " } else { "[FILE]" };
-                        if let Some(grep_text) = grep {
-                            if !is_dir {
-                                if let Ok(content) = fs::read_to_string(&p) {
-                                    if content.contains(grep_text) {
-                                        let preview = content.lines()
-                                            .filter(|l| l.contains(grep_text))
-                                            .take(5)
-                                            .collect::<Vec<_>>()
-                                            .join("\n  ");
-                                        results.push(format!("{} {} (matches)\n  {}", prefix, rel, preview));
-                                    }
-                                }
-                            }
-                        } else {
-                            let size = meta.map(|m| m.len()).unwrap_or(0);
-                            results.push(format!("{} {} ({} bytes)", prefix, rel, size));
-                        }
-                    }
-                    Err(e) => results.push(format!("Error: {e}")),
-                }
-            }
-            if results.is_empty() {
-                Ok(format!("No files found matching '{}' in {}", pattern, if search_path.is_empty() { "workspace root" } else { search_path }))
-            } else {
-                Ok(format!("Search results for '{}':\n{}", pattern, results.join("\n")))
-            }
-        }
-        "execute_command" => {
-            let command = input["command"]
-                .as_str()
-                .ok_or("Missing 'command' parameter")?;
-            let ws_root = resolve_workspace_path(workspace_root, "")?;
-
-            let output = std::process::Command::new("cmd")
-                .args(["/C", command])
-                .current_dir(&ws_root)
-                .output()
-                .map_err(|e| format!("Failed to execute command: {e}"))?;
-
-            let mut result = String::new();
-            if !output.stdout.is_empty() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let limited = if stdout.len() > 50_000 {
-                    format!("{}...\n[stdout truncated at 50KB]", &stdout[..50_000])
-                } else {
-                    stdout.to_string()
-                };
-                result.push_str(&format!("stdout:\n{}", limited));
-            }
-            if !output.stderr.is_empty() {
-                result.push_str(&format!("\nstderr:\n{}", String::from_utf8_lossy(&output.stderr)));
-            }
-            if result.is_empty() {
-                result.push_str(&format!("Command completed with exit code: {}", output.status.code().unwrap_or(-1)));
-            } else {
-                result.push_str(&format!("\nExit code: {}", output.status.code().unwrap_or(-1)));
-            }
-            Ok(result)
-        }
-        _ => Err(format!("Unknown tool: {name}")),
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Main chat loop
 // ---------------------------------------------------------------------------
 
-pub async fn run_chat<F: Fn(ChatEvent) + Send + 'static>(
+pub async fn run_chat<F: Fn(ChatEvent) + Send + Sync + 'static>(
     model_alias: String,
     model_id: String,
     user_message: String,
@@ -891,7 +235,10 @@ pub async fn run_chat<F: Fn(ChatEvent) + Send + 'static>(
         }],
     });
 
-    let tools = tool_definitions();
+    // Build tool registry and shared context
+    let registry = ToolRegistry::default();
+    let on_event: Arc<dyn Fn(ChatEvent) + Send + Sync> = Arc::new(on_event);
+    let ctx = ToolContext::with_event_sender(medical.clone(), workspace_root, on_event.clone());
 
     // Multi-turn loop: keep going until model responds with text (no tool calls)
     let mut turn = 0;
@@ -902,6 +249,8 @@ pub async fn run_chat<F: Fn(ChatEvent) + Send + 'static>(
             on_event(ChatEvent::Error("Reached max tool-call turns".into()));
             break;
         }
+
+        let tools = registry.definitions();
 
         let request = MessageRequest {
             model: model_id.clone(),
@@ -924,19 +273,19 @@ pub async fn run_chat<F: Fn(ChatEvent) + Send + 'static>(
         let mut tool_calls: Vec<PendingToolCall> = Vec::new();
         let mut current_tool: Option<PendingToolCall> = None;
         let mut current_text: String = String::new();
+        let mut current_thinking: String = String::new();
 
         loop {
             match stream.next_event().await {
                 Ok(Some(ApiStreamEvent::ContentBlockStart(event))) => {
                     match event.content_block {
                         OutputContentBlock::Text { text } => {
+                            // Only initialize the accumulator — don't emit.
+                            // ContentBlockDelta events carry the actual streamed text.
                             current_text = text;
-                            if !current_text.is_empty() {
-                                on_event(ChatEvent::Delta(current_text.clone()));
-                            }
                         }
                         OutputContentBlock::ToolUse { id, name, .. } => {
-                            // Flush any text before starting tool call
+                            // Flush any text/thinking before starting tool call
                             if !current_text.is_empty() {
                                 text_blocks.push(std::mem::take(&mut current_text));
                             }
@@ -946,7 +295,9 @@ pub async fn run_chat<F: Fn(ChatEvent) + Send + 'static>(
                                 input_json: String::new(),
                             });
                         }
-                        OutputContentBlock::Thinking { .. } => {}
+                        OutputContentBlock::Thinking { thinking, .. } => {
+                            current_thinking = thinking;
+                        }
                         _ => {}
                     }
                 }
@@ -960,6 +311,9 @@ pub async fn run_chat<F: Fn(ChatEvent) + Send + 'static>(
                             if let Some(ref mut tool) = current_tool {
                                 tool.input_json.push_str(&partial_json);
                             }
+                        }
+                        ContentBlockDelta::ThinkingDelta { thinking } => {
+                            current_thinking.push_str(&thinking);
                         }
                         _ => {}
                     }
@@ -989,6 +343,14 @@ pub async fn run_chat<F: Fn(ChatEvent) + Send + 'static>(
 
         // Build assistant message from collected blocks
         let mut assistant_content: Vec<InputContentBlock> = Vec::new();
+        // Reasoning / chain-of-thought must be included so it can be
+        // round-tripped back to the API on subsequent turns (DeepSeek V4).
+        if !current_thinking.is_empty() {
+            assistant_content.push(InputContentBlock::Thinking {
+                thinking: std::mem::take(&mut current_thinking),
+                signature: None,
+            });
+        }
         for text in &text_blocks {
             assistant_content.push(InputContentBlock::Text {
                 text: text.clone(),
@@ -1022,20 +384,9 @@ pub async fn run_chat<F: Fn(ChatEvent) + Send + 'static>(
         for tool in &tool_calls {
             let input: serde_json::Value =
                 serde_json::from_str(&tool.input_json).unwrap_or(serde_json::Value::Null);
-            let result = execute_tool(&medical, &tool.name, input, &workspace_root, &on_event).await;
+            let result = registry.execute(&tool.name, input, &ctx).await;
             let is_error = result.is_err();
             let text = result.unwrap_or_else(|e| e);
-
-            // Send paper results to UI if this is a search
-            if tool.name == "search_pubmed" {
-                if let Ok(input_val) = serde_json::from_str::<serde_json::Value>(&tool.input_json) {
-                    let query = input_val["query"].as_str().unwrap_or("");
-                    let limit = input_val["max_results"].as_u64().unwrap_or(10) as u32;
-                    if let Ok(papers) = medical.search_pubmed(query, limit).await {
-                        on_event(ChatEvent::SearchResults(papers));
-                    }
-                }
-            }
 
             tool_results.push(InputContentBlock::ToolResult {
                 tool_use_id: tool.id.clone(),

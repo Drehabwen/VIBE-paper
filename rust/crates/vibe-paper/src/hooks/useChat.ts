@@ -1,16 +1,10 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { ChatMessage, Paper, FileEntry } from "../types";
 
 export function useChat() {
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      role: "assistant",
-      content:
-        "欢迎使用 VIBE Paper！我是你的科研助手。\n\n你可以直接问我问题，我会帮你检索文献、解释术语、格式化引用。\n\n试试问我：\n• 帮我查一下阿尔茨海默病的最新研究\n• 解释一下什么是单核苷酸多态性\n• 用 Vancouver 格式引用这篇 PMID: 12345678",
-    },
-  ]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -20,44 +14,72 @@ export function useChat() {
     path: string;
     content: string;
   } | null>(null);
+  const currentModel = useRef<string>("");
+  const sendingRef = useRef(false);
 
-  const send = useCallback(
-    async (text: string, modelAlias: string) => {
-      if (!text.trim() || sending) return;
+  // Register event listeners once on mount, clean up on unmount
+  useEffect(() => {
+    const unlisteners: UnlistenFn[] = [];
 
-      setMessages((prev) => [...prev, { role: "user", content: text }]);
-      setSending(true);
-      setStreaming("");
-      setError(null);
-
-      // Set up event listeners before the invoke call
-      const p1 = listen<string>("chat-delta", (e) => {
+    const register = async () => {
+      const ul1 = await listen<string>("chat-delta", (e) => {
         setStreaming((prev) => prev + e.payload);
       });
-      const p2 = listen<string>("chat-done", (e) => {
+      const ul2 = await listen<string>("chat-done", (e) => {
         setMessages((prev) => [
           ...prev,
-          { role: "assistant", content: e.payload },
+          {
+            role: "assistant",
+            content: e.payload,
+            timestamp: Date.now(),
+            model: currentModel.current,
+          },
         ]);
         setStreaming("");
         setSending(false);
+        sendingRef.current = false;
       });
-      const p3 = listen<string>("chat-error", (e) => {
+      const ul3 = await listen<string>("chat-error", (e) => {
         setError(e.payload);
         setSending(false);
+        sendingRef.current = false;
       });
-      const p4 = listen<Paper[]>("search-results", (e) => {
+      const ul4 = await listen<Paper[]>("search-results", (e) => {
         setSearchResults(e.payload);
       });
-      const p5 = listen<FileEntry[]>("workspace-file-list", (e) => {
+      const ul5 = await listen<FileEntry[]>("workspace-file-list", (e) => {
         setWsFileList(e.payload);
       });
-      const p6 = listen<{ path: string; content: string }>(
+      const ul6 = await listen<{ path: string; content: string }>(
         "workspace-file-content",
         (e) => {
           setWsFileContent(e.payload);
         }
       );
+      unlisteners.push(ul1, ul2, ul3, ul4, ul5, ul6);
+    };
+
+    register();
+
+    return () => {
+      unlisteners.forEach((fn) => fn());
+    };
+  }, []);
+
+  const send = useCallback(
+    async (text: string, modelAlias: string) => {
+      if (!text.trim() || sendingRef.current) return;
+
+      currentModel.current = modelAlias;
+
+      setMessages((prev) => [
+        ...prev,
+        { role: "user", content: text, timestamp: Date.now() },
+      ]);
+      setSending(true);
+      sendingRef.current = true;
+      setStreaming("");
+      setError(null);
 
       try {
         await invoke("send_message", {
@@ -67,18 +89,14 @@ export function useChat() {
       } catch (e) {
         setError(String(e));
         setSending(false);
+        sendingRef.current = false;
       }
     },
-    [sending]
+    []
   );
 
   const clear = useCallback(() => {
-    setMessages([
-      {
-        role: "assistant",
-        content: "新对话已开始。有什么可以帮你的？",
-      },
-    ]);
+    setMessages([]);
     setStreaming("");
     setError(null);
     setSearchResults([]);

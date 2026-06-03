@@ -1,14 +1,14 @@
-import type { LeftTab } from "../types";
+import type { LibraryTab } from "../types";
 
 interface Props {
-  active: LeftTab;
-  onChange: (tab: LeftTab) => void;
+  active: LibraryTab;
+  onChange: (tab: LibraryTab) => void;
 }
 
-const TABS: { id: LeftTab; label: string; icon: string }[] = [
-  { id: "workspace", label: "工作区", icon: "📁" },
+const TABS: { id: LibraryTab; label: string; icon: string }[] = [
   { id: "papers", label: "文献", icon: "📄" },
   { id: "notes", label: "笔记", icon: "📝" },
+  { id: "files", label: "文件", icon: "📁" },
 ];
 
 export function TabBar({ active, onChange }: Props) {
@@ -20,7 +20,7 @@ export function TabBar({ active, onChange }: Props) {
           className={`tab-btn ${active === t.id ? "tab-active" : ""}`}
           onClick={() => onChange(t.id)}
         >
-          {t.icon} {t.label}
+          <span className="tab-icon">{t.icon}</span> {t.label}
         </button>
       ))}
     </div>
